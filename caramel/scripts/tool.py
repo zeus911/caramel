@@ -22,12 +22,17 @@ def cmdline():
 
     parser.add_argument("--list", help="List active requests, do nothing else",
                         action="store_true")
+    parser.add_argument("--list_san", help="List all SubjectAltNames",
+                        action="store_true")
 
     exclusives = parser.add_mutually_exclusive_group()
     exclusives.add_argument("--sign", metavar="id", type=int,
                             help="Sign the CSR with this id")
     exclusives.add_argument("--reject", metavar="id", type=int,
                             help="Reject the CSR with this id")
+    exclusives.add_argument("--add_san",
+                            metavar=("id", "kind", "value"), nargs=3,
+                            help="Add a SubjectAltName to the CSR.")
 
     cleanout = parser.add_mutually_exclusive_group()
     cleanout.add_argument("--clean", metavar="id", type=int,
@@ -51,6 +56,35 @@ def cmdline():
 def error_out(message):
     print(message)
     sys.exit(1)
+
+
+def add_san(number, typ, value):
+    if typ not in {"DNS", "IP", "email", "URI"}:
+        error_out("type should be either DNS | IP | email | URI")
+    kind = models.SubjectAltNameKinds[typ]
+    try:
+        san = models.SubjectAltName(kind, value)
+    except Exception as e:
+        error_out("Invalid something: {}".format(e))
+
+    with transaction.manager:
+        CSR = models.CSR.query().get(number)
+        if not CSR:
+            error_out("ID not found")
+
+        CSR.x509_sans.append(san)
+        try:
+            san.save()
+        except Exception as e:
+            error_out("DB error: {}".format(e))
+
+
+def list_sans():
+    requests = models.CSR.valid()
+    for csr in requests:
+        sans = " , ".join(str(san) for san in csr.x509_sans)
+        out = "{}: {}".format(csr.id, sans)
+        print(out)
 
 
 def print_list():
@@ -186,14 +220,19 @@ def main():
         closer()
         sys.exit(0)
 
+    if args.list_san:
+        list_sans()
+        closer()
+        sys.exit(0)
+
     if args.reject:
         csr_reject(args.reject)
 
     if args.wipe:
-        error_out("Not implemented yet")
+        csr_wipe(args.wipe)
 
     if args.clean:
-        error_out("Not implemented yet")
+        csr_clean(args.clean)
 
     if args.cleanall:
         error_out("Not implemented yet")
@@ -207,3 +246,6 @@ def main():
 
     if args.refresh:
         csr_resign(ca, life_short, life_long, settings_backdate)
+
+    if args.add_san:
+        add_san(*args.add_san)
